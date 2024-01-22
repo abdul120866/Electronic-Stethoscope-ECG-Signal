@@ -1,0 +1,248 @@
+classdef updated_code_electronic_stethoscope_ecg_signal_acquisition < matlab.apps.AppBase
+
+    % Properties that correspond to app components
+    properties (Access = public)
+        UIFigure            matlab.ui.Figure
+        DropDown            matlab.ui.control.DropDown
+        DropDownLabel       matlab.ui.control.Label
+        StopButton          matlab.ui.control.Button
+        StartButton         matlab.ui.control.Button
+        FilteredFFTAxis     matlab.ui.control.UIAxes
+        FFTPlotAxis         matlab.ui.control.UIAxes
+        FilteredSignalAxis  matlab.ui.control.UIAxes
+        SignalPlotAxis      matlab.ui.control.UIAxes
+    end
+
+    
+   
+    properties (Access = private)
+    DataCaptureFlag logical = false; % Indicates if data is being captured
+    arduinoConnection % Connection to Arduino
+    timeVector % For plotting over time
+    frequencyVector % For plotting frequency spectrum
+    SamplingRate double = 1000; % Rate of sampling in Hertz
+    MinFrequency double = 50; % Lower bound frequency in Hertz
+    MaxFrequency double = 250; % Upper bound frequency in Hertz
+    BandpassOrder double = 2; % Order for the bandpass filter
+    
+    end
+    
+methods (Access = private)
+
+    % Establishes connection with the Arduino board
+    function setupArduino(app)
+        if isempty(app.arduinoConnection)
+            try
+                app.arduinoConnection = arduino('COM8', 'Uno', 'Libraries', 'SPI');
+                disp('Connected to Arduino.');
+            catch errorDetail
+                disp('Connection failed:');
+                disp(errorDetail.message);
+            end
+        end
+
+
+    end
+        
+    
+
+    % Executes upon app startup
+    function onAppStart(app)
+        setupArduino(app);
+        app.timeVector = linspace(0, 1, 1000);
+        app.frequencyVector = linspace(0, 500, 500);
+        
+    end
+
+    % Refreshes the signal plots
+   function refreshPlotsAnd(app, signalData)
+        plot(app.SignalPlotAxis, app.timeVector, signalData);
+        title(app.SignalPlotAxis, 'Live Signal');
+        signalFFT = fft(signalData);
+        signalPower = abs(signalFFT/length(signalData));
+        signalSingleSide = signalPower(1:length(signalData)/2+1);
+        signalSingleSide(2:end-1) = 2*signalSingleSide(2:end-1);
+        plot(app.FFTPlotAxis, app.frequencyVector, signalSingleSide);
+        title(app.FFTPlotAxis, 'Signal Frequency Spectrum');
+    
+
+
+    end
+    
+end
+   
+
+    % Callbacks that handle component events
+    methods (Access = private)
+
+        % Button pushed function: StartButton
+        function StartButtonPushed(app, event)
+              disp('Data capture initiated.');
+        app.DataCaptureFlag = true;
+
+        if isempty(app.arduinoConnection)
+            app.arduinoConnection = arduino('COM8', 'Uno', 'Libraries', 'SPI');
+        end
+        ArduinoChannel = 'A5'; % Sensor connected to A5
+
+        dataBufferSize = 1000;
+        signalDataBuffer = zeros(1, dataBufferSize);
+        filteredSignalBuffer = zeros(1, dataBufferSize);
+        runningAverageBuffer = zeros(1, 100);
+
+        app.timeVector = linspace(0, 1, dataBufferSize);
+        app.frequencyVector = linspace(0, app.SamplingRate/2, dataBufferSize/2);
+
+        while app.DataCaptureFlag
+            ArduinoValue = readVoltage(app.arduinoConnection,ArduinoChannel);
+
+            runningAverageBuffer = [runningAverageBuffer(2:end), ArduinoValue];
+            averageOffset = mean(runningAverageBuffer);
+
+            adjustedSensorValue = ArduinoValue - averageOffset;
+            signalDataBuffer = [signalDataBuffer(2:end), adjustedSensorValue];
+
+            [bFilter, aFilter] = butter(app.BandpassOrder, [app.MinFrequency, app.MaxFrequency] / (app.SamplingRate / 2), 'bandpass');
+            filteredValue = filter(bFilter, aFilter, signalDataBuffer);
+            filteredSignalBuffer = [filteredSignalBuffer(2:end), filteredValue(end)];
+
+            currentPlotTime = linspace(0, length(signalDataBuffer)/app.SamplingRate, length(signalDataBuffer));
+            plot(app.SignalPlotAxis, currentPlotTime, 100*signalDataBuffer);
+            title(app.SignalPlotAxis, 'Live Signal Data');
+
+            plot(app.FilteredSignalAxis, currentPlotTime, filteredSignalBuffer);
+            title(app.FilteredSignalAxis, 'Filtered Signal');
+
+            rawFFT = abs(fft(signalDataBuffer));
+            halfPointFFT = rawFFT(1:dataBufferSize/2);
+            plot(app.FFTPlotAxis, app.frequencyVector, halfPointFFT);
+            title(app.FFTPlotAxis, 'Live Signal Frequency Spectrum');
+
+            filteredFFT = abs(fft(filteredSignalBuffer));
+            halfPointFilteredFFT = filteredFFT(1:dataBufferSize/2);
+            plot(app.FilteredFFTAxis, app.frequencyVector, halfPointFilteredFFT);
+            title(app.FilteredFFTAxis, 'Filtered Signal Frequency Spectrum');
+ 
+         
+        end
+
+        end
+
+        % Button pushed function: StopButton
+        function StopButtonPushed(app, event)
+ % Triggered when the Stop button is pressed             
+   app.DataCaptureFlag = false;
+        end
+    end
+
+    % Component initialization
+    methods (Access = private)
+
+        % Create UIFigure and components
+        function createComponents(app)
+
+            % Create UIFigure and hide until all components are created
+            app.UIFigure = uifigure('Visible', 'off');
+            app.UIFigure.Position = [100 100 897 535];
+            app.UIFigure.Name = 'MATLAB App';
+
+            % Create SignalPlotAxis
+            app.SignalPlotAxis = uiaxes(app.UIFigure);
+            title(app.SignalPlotAxis, 'Live Signal Data')
+            xlabel(app.SignalPlotAxis, 'Time')
+            ylabel(app.SignalPlotAxis, 'Amplitude')
+            zlabel(app.SignalPlotAxis, 'Z')
+            app.SignalPlotAxis.XGrid = 'on';
+            app.SignalPlotAxis.XMinorGrid = 'on';
+            app.SignalPlotAxis.YGrid = 'on';
+            app.SignalPlotAxis.YMinorGrid = 'on';
+            app.SignalPlotAxis.Position = [32 318 300 185];
+
+            % Create FilteredSignalAxis
+            app.FilteredSignalAxis = uiaxes(app.UIFigure);
+            title(app.FilteredSignalAxis, 'Filtered Signal')
+            xlabel(app.FilteredSignalAxis, 'Time')
+            ylabel(app.FilteredSignalAxis, 'Amplitude')
+            zlabel(app.FilteredSignalAxis, 'Z')
+            app.FilteredSignalAxis.XMinorGrid = 'on';
+            app.FilteredSignalAxis.YMinorGrid = 'on';
+            app.FilteredSignalAxis.Position = [32 114 300 185];
+
+            % Create FFTPlotAxis
+            app.FFTPlotAxis = uiaxes(app.UIFigure);
+            title(app.FFTPlotAxis, 'Live Signal Frequency Spectrum')
+            xlabel(app.FFTPlotAxis, 'Frequency (Hz)')
+            ylabel(app.FFTPlotAxis, 'Amplitude')
+            zlabel(app.FFTPlotAxis, 'Z')
+            app.FFTPlotAxis.XGrid = 'on';
+            app.FFTPlotAxis.XMinorGrid = 'on';
+            app.FFTPlotAxis.YGrid = 'on';
+            app.FFTPlotAxis.YMinorGrid = 'on';
+            app.FFTPlotAxis.Position = [481 318 300 185];
+
+            % Create FilteredFFTAxis
+            app.FilteredFFTAxis = uiaxes(app.UIFigure);
+            title(app.FilteredFFTAxis, 'Filtered Signal Frequency Spectrum')
+            xlabel(app.FilteredFFTAxis, 'Frequency(Hz)')
+            ylabel(app.FilteredFFTAxis, 'Amplitude')
+            zlabel(app.FilteredFFTAxis, 'Z')
+            app.FilteredFFTAxis.XMinorGrid = 'on';
+            app.FilteredFFTAxis.YMinorGrid = 'on';
+            app.FilteredFFTAxis.Position = [481 99 300 185];
+
+            % Create StartButton
+            app.StartButton = uibutton(app.UIFigure, 'push');
+            app.StartButton.ButtonPushedFcn = createCallbackFcn(app, @StartButtonPushed, true);
+            app.StartButton.BackgroundColor = [0 1 0];
+            app.StartButton.Position = [500 33 100 23];
+            app.StartButton.Text = 'Start';
+
+            % Create StopButton
+            app.StopButton = uibutton(app.UIFigure, 'push');
+            app.StopButton.ButtonPushedFcn = createCallbackFcn(app, @StopButtonPushed, true);
+            app.StopButton.BackgroundColor = [1 0.4118 0.1608];
+            app.StopButton.Position = [659 33 100 23];
+            app.StopButton.Text = 'Stop';
+
+            % Create DropDownLabel
+            app.DropDownLabel = uilabel(app.UIFigure);
+            app.DropDownLabel.HorizontalAlignment = 'right';
+            app.DropDownLabel.Position = [115 43 65 22];
+            app.DropDownLabel.Text = 'Drop Down';
+
+            % Create DropDown
+            app.DropDown = uidropdown(app.UIFigure);
+            app.DropDown.Items = {'1', '2', '3', '4', '5', '6', '7', '8'};
+            app.DropDown.Position = [195 43 100 22];
+            app.DropDown.Value = '1';
+
+            % Show the figure after all components are created
+            app.UIFigure.Visible = 'on';
+        end
+    end
+
+    % App creation and deletion
+    methods (Access = public)
+
+        % Construct app
+        function app = updated_code_electronic_stethoscope_ecg_signal_acquisition
+
+            % Create UIFigure and components
+            createComponents(app)
+
+            % Register the app with App Designer
+            registerApp(app, app.UIFigure)
+
+            if nargout == 0
+                clear app
+            end
+        end
+
+        % Code that executes before app deletion
+        function delete(app)
+
+            % Delete UIFigure when app is deleted
+            delete(app.UIFigure)
+        end
+    end
+end
